@@ -55,7 +55,7 @@ claude-hive/
 
 ```bash
 # Clone the repo
-git clone https://github.com/your-username/claude-hive.git
+git clone https://github.com/jtchien0925/claude-hive.git
 cd claude-hive
 
 # Install dependencies
