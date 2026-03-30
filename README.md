@@ -1,9 +1,23 @@
 # Claude Hive
 
+<p align="center">
+  <img src="docs/cover.png" alt="Claude Hive" width="400" />
+</p>
+
 Multi-session Claude Code monitor & manager. Spawn, watch, and control multiple Claude Code instances from a single web dashboard.
 
 ![License](https://img.shields.io/badge/license-MIT-yellow)
 ![Node](https://img.shields.io/badge/node-%3E%3D20-green)
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/dashboard.png" alt="Dashboard — multiple sessions running" width="800" />
+</p>
+
+<p align="center">
+  <img src="docs/new-session.png" alt="Create a new Claude session" width="500" />
+</p>
 
 ## Why
 
