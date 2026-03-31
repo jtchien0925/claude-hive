@@ -25,18 +25,17 @@ export function TerminalPanel({
   useEffect(() => {
     if (!containerRef.current) return;
 
+    let cancelled = false;
     let cleanup: (() => void) | undefined;
 
     async function init() {
-      // Wait for container to be in the DOM
       if (!containerRef.current) return;
 
       const { Terminal } = await import("@xterm/xterm");
       const { FitAddon } = await import("@xterm/addon-fit");
       const { WebLinksAddon } = await import("@xterm/addon-web-links");
 
-      // Check again after async imports
-      if (!containerRef.current) return;
+      if (cancelled || !containerRef.current) return;
 
       const term = new Terminal({
         theme: {
@@ -120,6 +119,7 @@ export function TerminalPanel({
     init();
 
     return () => {
+      cancelled = true;
       cleanup?.();
     };
   }, [session.id, onTerminalData, onInput, onResize, onRequestBuffer]);
