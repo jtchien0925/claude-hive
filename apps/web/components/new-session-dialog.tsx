@@ -1,11 +1,13 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import type { SessionColor, SSHConfig } from "@claude-hive/shared";
+import { SESSION_COLORS, COLOR_HEX } from "@claude-hive/shared";
 
 interface NewSessionDialogProps {
   open: boolean;
   onClose: () => void;
-  onCreate: (name: string, workingDir: string, initialPrompt?: string) => void;
+  onCreate: (name: string, workingDir: string, initialPrompt?: string, color?: SessionColor, ssh?: SSHConfig) => void;
   homeDir: string;
   browseDirs: { path: string; dirs: string[] };
   onBrowse: (path: string) => void;
@@ -23,6 +25,13 @@ export function NewSessionDialog({
   const [workingDir, setWorkingDir] = useState("");
   const [initialPrompt, setInitialPrompt] = useState("");
   const [showBrowser, setShowBrowser] = useState(false);
+  const [color, setColor] = useState<SessionColor | undefined>(undefined);
+  const [sshEnabled, setSshEnabled] = useState(false);
+  const [sshHost, setSshHost] = useState("");
+  const [sshPort, setSshPort] = useState("");
+  const [sshUser, setSshUser] = useState("");
+  const [sshIdentityFile, setSshIdentityFile] = useState("");
+  const [sshRemoteWorkingDir, setSshRemoteWorkingDir] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Set home dir as default when it arrives
@@ -43,11 +52,33 @@ export function NewSessionDialog({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onCreate(name || `Session ${Date.now() % 1000}`, workingDir || homeDir || "~", initialPrompt || undefined);
+    const sshConfig: SSHConfig | undefined = sshEnabled && sshHost && sshUser && sshRemoteWorkingDir
+      ? {
+          host: sshHost,
+          port: sshPort ? parseInt(sshPort, 10) : undefined,
+          user: sshUser,
+          identityFile: sshIdentityFile || undefined,
+          remoteWorkingDir: sshRemoteWorkingDir,
+        }
+      : undefined;
+    onCreate(
+      name || `Session ${Date.now() % 1000}`,
+      workingDir || homeDir || "~",
+      initialPrompt || undefined,
+      color,
+      sshConfig,
+    );
     setName("");
     setWorkingDir("");
     setInitialPrompt("");
     setShowBrowser(false);
+    setColor(undefined);
+    setSshEnabled(false);
+    setSshHost("");
+    setSshPort("");
+    setSshUser("");
+    setSshIdentityFile("");
+    setSshRemoteWorkingDir("");
     onClose();
   };
 
@@ -178,6 +209,106 @@ export function NewSessionDialog({
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-primary)] px-3 py-2 text-sm outline-none focus:border-amber-500/50 resize-none"
           />
         </label>
+
+        {/* Color picker */}
+        <div className="mb-4">
+          <span className="text-xs text-[var(--text-secondary)] mb-2 block">Color Tag (optional)</span>
+          <div className="flex gap-2">
+            {SESSION_COLORS.map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => setColor(color === c ? undefined : c)}
+                className={`h-6 w-6 rounded-full border-2 transition-transform hover:scale-110 ${
+                  color === c ? "border-white scale-110" : "border-transparent"
+                }`}
+                style={{ backgroundColor: COLOR_HEX[c] }}
+                title={c}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* SSH configuration */}
+        <div className="mb-4">
+          <button
+            type="button"
+            onClick={() => setSshEnabled(!sshEnabled)}
+            className={`flex items-center gap-2 text-xs transition-colors ${
+              sshEnabled ? "text-amber-400" : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+            }`}
+          >
+            <div className={`h-4 w-4 rounded border flex items-center justify-center transition-colors ${
+              sshEnabled ? "border-amber-500 bg-amber-500/20" : "border-[var(--border)]"
+            }`}>
+              {sshEnabled && (
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              )}
+            </div>
+            SSH Remote Session
+          </button>
+
+          {sshEnabled && (
+            <div className="mt-3 space-y-2 rounded-lg border border-[var(--border)] bg-[var(--bg-primary)] p-3">
+              <div className="grid grid-cols-3 gap-2">
+                <label className="col-span-2 block">
+                  <span className="text-[10px] text-[var(--text-muted)] mb-0.5 block">Host</span>
+                  <input
+                    type="text"
+                    value={sshHost}
+                    onChange={(e) => setSshHost(e.target.value)}
+                    placeholder="192.168.1.100"
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] px-3 py-1.5 text-sm outline-none focus:border-amber-500/50"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-[10px] text-[var(--text-muted)] mb-0.5 block">Port</span>
+                  <input
+                    type="text"
+                    value={sshPort}
+                    onChange={(e) => setSshPort(e.target.value)}
+                    placeholder="22"
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] px-3 py-1.5 text-sm outline-none focus:border-amber-500/50"
+                  />
+                </label>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block">
+                  <span className="text-[10px] text-[var(--text-muted)] mb-0.5 block">User</span>
+                  <input
+                    type="text"
+                    value={sshUser}
+                    onChange={(e) => setSshUser(e.target.value)}
+                    placeholder="ubuntu"
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] px-3 py-1.5 text-sm outline-none focus:border-amber-500/50"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-[10px] text-[var(--text-muted)] mb-0.5 block">Identity File (optional)</span>
+                  <input
+                    type="text"
+                    value={sshIdentityFile}
+                    onChange={(e) => setSshIdentityFile(e.target.value)}
+                    placeholder="~/.ssh/id_rsa"
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] px-3 py-1.5 text-sm outline-none focus:border-amber-500/50"
+                  />
+                </label>
+              </div>
+              <label className="block">
+                <span className="text-[10px] text-[var(--text-muted)] mb-0.5 block">Remote Working Directory</span>
+                <input
+                  type="text"
+                  value={sshRemoteWorkingDir}
+                  onChange={(e) => setSshRemoteWorkingDir(e.target.value)}
+                  placeholder="/home/ubuntu/project"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg-secondary)] px-3 py-1.5 text-sm outline-none focus:border-amber-500/50"
+                />
+              </label>
+            </div>
+          )}
+        </div>
 
         <div className="flex justify-end gap-2">
           <button

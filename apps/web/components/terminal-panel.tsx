@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import type { Session } from "@claude-hive/shared";
 
 interface TerminalPanelProps {
@@ -11,7 +11,10 @@ interface TerminalPanelProps {
   onRequestBuffer: (sessionId: string) => void;
 }
 
-export function TerminalPanel({
+// Module-level mutex to prevent concurrent init for the same container
+const initLocks = new WeakSet<HTMLDivElement>();
+
+export const TerminalPanel = memo(function TerminalPanel({
   session,
   onTerminalData,
   onInput,
@@ -20,109 +23,144 @@ export function TerminalPanel({
 }: TerminalPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<any>(null);
-  const fitRef = useRef<any>(null);
+  const cleanupRef = useRef<(() => void) | null>(null);
+
+  // Store callbacks in refs so the effect doesn't re-run when they change
+  const onTerminalDataRef = useRef(onTerminalData);
+  const onInputRef = useRef(onInput);
+  const onResizeRef = useRef(onResize);
+  const onRequestBufferRef = useRef(onRequestBuffer);
+  onTerminalDataRef.current = onTerminalData;
+  onInputRef.current = onInput;
+  onResizeRef.current = onResize;
+  onRequestBufferRef.current = onRequestBuffer;
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    const container = containerRef.current;
+    if (!container) return;
 
+    // Tear down any previous terminal
+    if (cleanupRef.current) {
+      cleanupRef.current();
+      cleanupRef.current = null;
+    }
+    termRef.current = null;
+    container.innerHTML = "";
+
+    // Use a cancelled flag scoped to THIS effect invocation
     let cancelled = false;
-    let cleanup: (() => void) | undefined;
+    const initId = session.id;
+    // Capture non-null container for use inside async init
+    const el = container;
 
     async function init() {
-      if (!containerRef.current) return;
+      // Acquire lock — if another init is already in progress for this
+      // container (React strict mode double-mount), bail immediately
+      if (initLocks.has(el)) return;
+      initLocks.add(el);
 
-      const { Terminal } = await import("@xterm/xterm");
-      const { FitAddon } = await import("@xterm/addon-fit");
-      const { WebLinksAddon } = await import("@xterm/addon-web-links");
+      try {
+        const { Terminal } = await import("@xterm/xterm");
+        const { FitAddon } = await import("@xterm/addon-fit");
+        const { WebLinksAddon } = await import("@xterm/addon-web-links");
 
-      if (cancelled || !containerRef.current) return;
+        // If this effect was cleaned up while we were awaiting imports, bail
+        if (cancelled) return;
 
-      const term = new Terminal({
-        theme: {
-          background: "#0a0a0a",
-          foreground: "#e5e5e5",
-          cursor: "#f59e0b",
-          cursorAccent: "#0a0a0a",
-          selectionBackground: "#f59e0b33",
-          black: "#0a0a0a",
-          red: "#ef4444",
-          green: "#22c55e",
-          yellow: "#f59e0b",
-          blue: "#3b82f6",
-          magenta: "#a855f7",
-          cyan: "#06b6d4",
-          white: "#e5e5e5",
-          brightBlack: "#666666",
-          brightRed: "#f87171",
-          brightGreen: "#4ade80",
-          brightYellow: "#fbbf24",
-          brightBlue: "#60a5fa",
-          brightMagenta: "#c084fc",
-          brightCyan: "#22d3ee",
-          brightWhite: "#ffffff",
-        },
-        fontSize: 13,
-        fontFamily: "'Geist Mono', 'SF Mono', Monaco, monospace",
-        cursorBlink: true,
-        scrollback: 10000,
-        allowProposedApi: true,
-      });
+        const term = new Terminal({
+          theme: {
+            background: "#0a0a0a",
+            foreground: "#e5e5e5",
+            cursor: "#f59e0b",
+            cursorAccent: "#0a0a0a",
+            selectionBackground: "#f59e0b33",
+            black: "#0a0a0a",
+            red: "#ef4444",
+            green: "#22c55e",
+            yellow: "#f59e0b",
+            blue: "#3b82f6",
+            magenta: "#a855f7",
+            cyan: "#06b6d4",
+            white: "#e5e5e5",
+            brightBlack: "#666666",
+            brightRed: "#f87171",
+            brightGreen: "#4ade80",
+            brightYellow: "#fbbf24",
+            brightBlue: "#60a5fa",
+            brightMagenta: "#c084fc",
+            brightCyan: "#22d3ee",
+            brightWhite: "#ffffff",
+          },
+          fontSize: 13,
+          fontFamily: "'Geist Mono', 'SF Mono', Monaco, monospace",
+          cursorBlink: true,
+          scrollback: 10000,
+          allowProposedApi: true,
+        });
 
-      const fitAddon = new FitAddon();
-      term.loadAddon(fitAddon);
-      term.loadAddon(new WebLinksAddon());
+        // Double-check cancelled after creating terminal (before mounting to DOM)
+        if (cancelled) {
+          term.dispose();
+          return;
+        }
 
-      const container = containerRef.current;
-      if (!container) {
-        term.dispose();
-        return;
-      }
+        const fitAddon = new FitAddon();
+        term.loadAddon(fitAddon);
+        term.loadAddon(new WebLinksAddon());
 
-      term.open(container);
-      fitAddon.fit();
-
-      termRef.current = term;
-      fitRef.current = fitAddon;
-
-      // Forward input to server
-      term.onData((data) => {
-        onInput(session.id, data);
-      });
-
-      // Report size
-      onResize(session.id, term.cols, term.rows);
-      term.onResize(({ cols, rows }) => {
-        onResize(session.id, cols, rows);
-      });
-
-      // Listen for live output
-      const unsubscribe = onTerminalData(session.id, (data) => {
-        term.write(data);
-      });
-
-      // Request buffered history so we see past output
-      onRequestBuffer(session.id);
-
-      // Handle container resize
-      const observer = new ResizeObserver(() => {
+        el.innerHTML = "";
+        term.open(el);
         fitAddon.fit();
-      });
-      observer.observe(container);
 
-      cleanup = () => {
-        unsubscribe();
-        observer.disconnect();
-        term.dispose();
-      };
+        termRef.current = term;
+
+        // Forward input to server
+        term.onData((data) => {
+          onInputRef.current(initId, data);
+        });
+
+        // Report size
+        onResizeRef.current(initId, term.cols, term.rows);
+        term.onResize(({ cols, rows }) => {
+          onResizeRef.current(initId, cols, rows);
+        });
+
+        // Listen for live output
+        const unsubscribe = onTerminalDataRef.current(initId, (data) => {
+          term.write(data);
+        });
+
+        // Request buffered history so we see past output
+        onRequestBufferRef.current(initId);
+
+        // Handle container resize
+        const observer = new ResizeObserver(() => {
+          fitAddon.fit();
+        });
+        observer.observe(el);
+
+        cleanupRef.current = () => {
+          unsubscribe();
+          observer.disconnect();
+          term.dispose();
+          termRef.current = null;
+        };
+      } finally {
+        initLocks.delete(el);
+      }
     }
 
     init();
 
     return () => {
       cancelled = true;
-      cleanup?.();
+      if (cleanupRef.current) {
+        cleanupRef.current();
+        cleanupRef.current = null;
+      }
+      termRef.current = null;
     };
-  }, [session.id, onTerminalData, onInput, onResize, onRequestBuffer]);
+  }, [session.id]);
 
   return (
     <div
@@ -131,4 +169,4 @@ export function TerminalPanel({
       style={{ background: "#0a0a0a" }}
     />
   );
-}
+});

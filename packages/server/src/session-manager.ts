@@ -7,7 +7,11 @@ import type {
   Session,
   SessionStatus,
   SessionMetrics,
+  SessionGroup,
+  SSHConfig,
+  SessionColor,
 } from "@claude-hive/shared";
+import { DEFAULT_METRICS } from "@claude-hive/shared";
 
 interface ManagedSession {
   info: Session;
@@ -50,11 +54,27 @@ function findClaude(): string {
 const CLAUDE_PATH = findClaude();
 console.log(`[hive] Found claude at: ${CLAUDE_PATH}`);
 
+// ANSI stripping regexes
+const ANSI_ESCAPE_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
+const ANSI_OSC_RE = /\x1b\](?:[^\x07\x1b]*(?:\x07|\x1b\\))/g;
+
+function stripAnsi(text: string): string {
+  return text.replace(ANSI_ESCAPE_RE, "").replace(ANSI_OSC_RE, "");
+}
+
+// Token pricing constants (Claude Sonnet rates as rough estimate)
+const INPUT_PRICE_PER_TOKEN = 3 / 1_000_000;   // $3/1M tokens
+const OUTPUT_PRICE_PER_TOKEN = 15 / 1_000_000;  // $15/1M tokens
+const CHARS_PER_TOKEN = 4;
+
 export class SessionManager {
   private sessions = new Map<string, ManagedSession>();
+  private groups = new Map<string, SessionGroup>();
   private dataListeners = new Map<string, Set<(sessionId: string, data: string) => void>>();
   private updateListeners = new Set<(session: Session) => void>();
   private removeListeners = new Set<(sessionId: string) => void>();
+  private lastKilledInfo: { name: string; workingDir: string } | null = null;
+  private streamingCharCounts = new Map<string, number>();
 
   createSession(opts: {
     name: string;
@@ -62,23 +82,38 @@ export class SessionManager {
     initialPrompt?: string;
     cols?: number;
     rows?: number;
+    color?: SessionColor;
+    ssh?: SSHConfig;
   }): Session {
     const id = randomUUID();
 
     // Resolve ~ to home directory
     const workingDir = opts.workingDir.replace(/^~/, homedir());
 
-    // Build the claude command via shell so symlinks and shebangs work
     const shell = process.env.SHELL || "/bin/zsh";
-    let claudeCmd = CLAUDE_PATH;
-    if (opts.initialPrompt) {
-      // Escape single quotes in the prompt
-      const escaped = opts.initialPrompt.replace(/'/g, "'\\''");
-      claudeCmd += ` -p '${escaped}'`;
+    let spawnCmd: string;
+
+    if (opts.ssh) {
+      // Build SSH command to run claude on remote host
+      const ssh = opts.ssh;
+      const parts = ["ssh", "-tt"];
+      if (ssh.port) parts.push("-p", String(ssh.port));
+      if (ssh.identityFile) parts.push("-i", ssh.identityFile);
+      parts.push(`${ssh.user}@${ssh.host}`);
+      parts.push(`"cd ${ssh.remoteWorkingDir} && claude"`);
+      spawnCmd = parts.join(" ");
+    } else {
+      // Build the claude command via shell so symlinks and shebangs work
+      spawnCmd = CLAUDE_PATH;
+      if (opts.initialPrompt) {
+        // Escape single quotes in the prompt
+        const escaped = opts.initialPrompt.replace(/'/g, "'\\''");
+        spawnCmd += ` -p '${escaped}'`;
+      }
     }
 
     // Spawn via login shell so PATH and env are fully set up
-    const term = pty.spawn(shell, ["-l", "-c", claudeCmd], {
+    const term = pty.spawn(shell, ["-l", "-c", spawnCmd], {
       name: "xterm-256color",
       cols: opts.cols || 120,
       rows: opts.rows || 30,
@@ -98,13 +133,12 @@ export class SessionManager {
       status: "idle",
       createdAt: now,
       pid: term.pid,
-      metrics: {
-        tokenEstimate: 0,
-        toolCalls: 0,
-        duration: 0,
-        lastActivity: now,
-      },
+      metrics: { ...DEFAULT_METRICS, lastActivity: now },
     };
+
+    if (opts.ssh) {
+      info.ssh = opts.ssh;
+    }
 
     const managed: ManagedSession = {
       info,
@@ -153,17 +187,59 @@ export class SessionManager {
     const prev = managed.info.status;
 
     // Detect tool use patterns
-    if (data.includes("⏳") || data.includes("Running") || data.includes("Executing")) {
+    if (data.includes("\u23F3") || data.includes("Running") || data.includes("Executing")) {
       managed.info.status = "tool_use";
       managed.info.metrics.toolCalls++;
     } else if (data.includes("Allow") || data.includes("(y/n)") || data.includes("approve")) {
       managed.info.status = "waiting_approval";
-    } else if (data.includes("❯") || data.includes(">") || data.includes("$")) {
+    } else if (data.includes("\u276F") || data.includes(">") || data.includes("$")) {
       // Prompt indicators — likely idle
       managed.info.status = "idle";
     } else if (data.length > 20) {
       // Substantial output = streaming
       managed.info.status = "streaming";
+    }
+
+    // Token estimation: accumulate output chars while streaming
+    const sid = managed.info.id;
+    if (managed.info.status === "streaming") {
+      const current = this.streamingCharCounts.get(sid) || 0;
+      this.streamingCharCounts.set(sid, current + data.length);
+    }
+
+    // When transitioning away from streaming, finalize token estimates
+    if (prev === "streaming" && managed.info.status !== "streaming") {
+      const charCount = this.streamingCharCounts.get(sid) || 0;
+      const outputTokens = Math.round(charCount / CHARS_PER_TOKEN);
+      // Rough heuristic: input tokens ~ 2x output tokens for typical interactions
+      const inputTokens = Math.round(outputTokens * 2);
+
+      managed.info.metrics.outputTokens += outputTokens;
+      managed.info.metrics.inputTokens += inputTokens;
+      managed.info.metrics.tokenEstimate = managed.info.metrics.inputTokens + managed.info.metrics.outputTokens;
+      managed.info.metrics.costEstimate =
+        managed.info.metrics.inputTokens * INPUT_PRICE_PER_TOKEN +
+        managed.info.metrics.outputTokens * OUTPUT_PRICE_PER_TOKEN;
+
+      this.streamingCharCounts.set(sid, 0);
+    }
+
+    // Also watch for explicit token/cost patterns in output
+    if (data.includes("tokens") || data.includes("Token")) {
+      // If the output mentions tokens, try to parse numbers near the word
+      const tokenMatch = data.match(/(\d[\d,]+)\s*tokens?/i);
+      if (tokenMatch) {
+        const parsed = parseInt(tokenMatch[1].replace(/,/g, ""), 10);
+        if (!isNaN(parsed) && parsed > 0) {
+          managed.info.metrics.tokenEstimate = parsed;
+          // Approximate split: 60% input, 40% output
+          managed.info.metrics.inputTokens = Math.round(parsed * 0.6);
+          managed.info.metrics.outputTokens = Math.round(parsed * 0.4);
+          managed.info.metrics.costEstimate =
+            managed.info.metrics.inputTokens * INPUT_PRICE_PER_TOKEN +
+            managed.info.metrics.outputTokens * OUTPUT_PRICE_PER_TOKEN;
+        }
+      }
     }
 
     if (prev !== managed.info.status) {
@@ -174,18 +250,22 @@ export class SessionManager {
   killSession(id: string): boolean {
     const managed = this.sessions.get(id);
     if (!managed) return false;
+    // Stash info before killing so restart can use it
+    this.lastKilledInfo = { name: managed.info.name, workingDir: managed.info.workingDir };
+    // Neutralize callbacks so residual PTY events are ignored
+    managed.onData = () => {};
+    managed.onExit = () => {};
     try { managed.pty.kill(); } catch {}
     this.sessions.delete(id);
+    this.streamingCharCounts.delete(id);
+    // Clear any session-specific terminal data listeners
+    this.dataListeners.delete(id);
     for (const cb of this.removeListeners) cb(id);
     return true;
   }
 
-  restartSession(id: string): Session | null {
-    const managed = this.sessions.get(id);
-    if (!managed) return null;
-    const { name, workingDir } = managed.info;
-    this.killSession(id);
-    return this.createSession({ name, workingDir });
+  getLastKilled(): { name: string; workingDir: string } | null {
+    return this.lastKilledInfo;
   }
 
   sendInput(id: string, data: string): boolean {
@@ -220,6 +300,105 @@ export class SessionManager {
       return m.info;
     });
   }
+
+  // ── Color & Rename ─────────────────────────────────────────
+
+  setSessionColor(id: string, color: SessionColor): boolean {
+    const managed = this.sessions.get(id);
+    if (!managed) return false;
+    managed.info.color = color;
+    this.notifyUpdate(managed.info);
+    return true;
+  }
+
+  renameSession(id: string, name: string): boolean {
+    const managed = this.sessions.get(id);
+    if (!managed) return false;
+    managed.info.name = name;
+    this.notifyUpdate(managed.info);
+    return true;
+  }
+
+  // ── Group Management ───────────────────────────────────────
+
+  createGroup(name: string): SessionGroup {
+    const group: SessionGroup = {
+      id: randomUUID(),
+      name,
+      sessionIds: [],
+      createdAt: Date.now(),
+    };
+    this.groups.set(group.id, group);
+    return group;
+  }
+
+  deleteGroup(id: string): boolean {
+    return this.groups.delete(id);
+  }
+
+  addToGroup(groupId: string, sessionId: string): SessionGroup | null {
+    const group = this.groups.get(groupId);
+    if (!group) return null;
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+    if (!group.sessionIds.includes(sessionId)) {
+      group.sessionIds.push(sessionId);
+    }
+    return group;
+  }
+
+  removeFromGroup(groupId: string, sessionId: string): SessionGroup | null {
+    const group = this.groups.get(groupId);
+    if (!group) return null;
+    group.sessionIds = group.sessionIds.filter((id) => id !== sessionId);
+    return group;
+  }
+
+  listGroups(): SessionGroup[] {
+    return Array.from(this.groups.values());
+  }
+
+  // ── Export Logs ────────────────────────────────────────────
+
+  exportLogs(sessionId: string, format: "text" | "json" | "ansi"): { data: string; filename: string } | null {
+    const managed = this.sessions.get(sessionId);
+    if (!managed) return null;
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const safeName = managed.info.name.replace(/[^a-zA-Z0-9_-]/g, "_");
+
+    switch (format) {
+      case "ansi": {
+        return {
+          data: managed.outputBuffer,
+          filename: `${safeName}_${timestamp}.ans`,
+        };
+      }
+      case "text": {
+        return {
+          data: stripAnsi(managed.outputBuffer),
+          filename: `${safeName}_${timestamp}.txt`,
+        };
+      }
+      case "json": {
+        const strippedText = stripAnsi(managed.outputBuffer);
+        const jsonData = {
+          sessionId: managed.info.id,
+          name: managed.info.name,
+          workingDir: managed.info.workingDir,
+          createdAt: managed.info.createdAt,
+          duration: Date.now() - managed.info.createdAt,
+          output: strippedText,
+        };
+        return {
+          data: JSON.stringify(jsonData, null, 2),
+          filename: `${safeName}_${timestamp}.json`,
+        };
+      }
+    }
+  }
+
+  // ── Event Listeners ────────────────────────────────────────
 
   onTerminalData(cb: (sessionId: string, data: string) => void) {
     if (!this.dataListeners.has("*")) this.dataListeners.set("*", new Set());

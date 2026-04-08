@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-:root {
+:root, .dark {
   --bg-primary: #0a0a0a;
   --bg-secondary: #141414;
   --bg-tertiary: #1a1a1a;
@@ -16,6 +16,24 @@
   --red: #ef4444;
   --purple: #a855f7;
   --orange: #f97316;
+}
+
+.light {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f5f5f5;
+  --bg-tertiary: #ebebeb;
+  --border: #e0e0e0;
+  --border-active: #d0d0d0;
+  --text-primary: #171717;
+  --text-secondary: #525252;
+  --text-muted: #999;
+  --accent: #d97706;
+  --accent-dim: #fcd34d;
+  --green: #16a34a;
+  --blue: #2563eb;
+  --red: #dc2626;
+  --purple: #9333ea;
+  --orange: #ea580c;
 }
 
 body {

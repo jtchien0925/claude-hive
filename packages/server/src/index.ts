@@ -49,13 +49,9 @@ wss.on("connection", (ws) => {
   // Send current session list on connect
   send(ws, { type: "session_list", sessions: manager.listSessions() });
 
-  // Send buffered output for each session so new clients see history
-  for (const session of manager.listSessions()) {
-    const buffer = manager.getSessionBuffer(session.id);
-    if (buffer) {
-      send(ws, { type: "terminal_output", sessionId: session.id, data: buffer });
-    }
-  }
+  // NOTE: Don't send buffered output here — each TerminalPanel requests
+  // its own buffer via "get_buffer" when it mounts. Sending it here too
+  // causes double-rendered lines in the terminal.
 
   ws.on("message", (raw) => {
     let msg: ClientMessage;
@@ -73,6 +69,8 @@ wss.on("connection", (ws) => {
             name: msg.name,
             workingDir: msg.workingDir,
             initialPrompt: msg.initialPrompt,
+            color: msg.color,
+            ssh: msg.ssh,
           });
           broadcast({ type: "session_created", session });
           console.log(`[hive] Session created: ${session.name} (${session.id})`);
@@ -92,11 +90,21 @@ wss.on("connection", (ws) => {
       }
 
       case "restart_session": {
-        const session = manager.restartSession(msg.sessionId);
-        if (!session) send(ws, { type: "error", message: "Session not found", sessionId: msg.sessionId });
-        else {
-          broadcast({ type: "session_created", session });
-          console.log(`[hive] Session restarted: ${session.name}`);
+        // Kill the old session first and broadcast its removal
+        const oldKilled = manager.killSession(msg.sessionId);
+        if (!oldKilled) {
+          send(ws, { type: "error", message: "Session not found", sessionId: msg.sessionId });
+        } else {
+          // Get the old session info before it was killed for name/dir
+          const oldInfo = manager.getLastKilled();
+          if (oldInfo) {
+            const session = manager.createSession({
+              name: oldInfo.name,
+              workingDir: oldInfo.workingDir,
+            });
+            broadcast({ type: "session_created", session });
+            console.log(`[hive] Session restarted: ${session.name}`);
+          }
         }
         break;
       }
@@ -141,6 +149,69 @@ wss.on("connection", (ws) => {
           send(ws, { type: "browse_result", path: msg.path, dirs });
         } catch {
           send(ws, { type: "browse_result", path: msg.path, dirs: [] });
+        }
+        break;
+      }
+
+      case "set_session_color": {
+        const ok = manager.setSessionColor(msg.sessionId, msg.color);
+        if (ok) {
+          const sessions = manager.listSessions();
+          const session = sessions.find((s) => s.id === msg.sessionId);
+          if (session) broadcast({ type: "session_updated", session });
+        } else {
+          send(ws, { type: "error", message: "Session not found", sessionId: msg.sessionId });
+        }
+        break;
+      }
+
+      case "rename_session": {
+        const ok = manager.renameSession(msg.sessionId, msg.name);
+        if (ok) {
+          const sessions = manager.listSessions();
+          const session = sessions.find((s) => s.id === msg.sessionId);
+          if (session) broadcast({ type: "session_updated", session });
+        } else {
+          send(ws, { type: "error", message: "Session not found", sessionId: msg.sessionId });
+        }
+        break;
+      }
+
+      case "create_group": {
+        const group = manager.createGroup(msg.name);
+        broadcast({ type: "group_created", group });
+        break;
+      }
+
+      case "delete_group": {
+        const ok = manager.deleteGroup(msg.groupId);
+        if (ok) broadcast({ type: "group_deleted", groupId: msg.groupId });
+        break;
+      }
+
+      case "add_to_group": {
+        const group = manager.addToGroup(msg.groupId, msg.sessionId);
+        if (group) broadcast({ type: "group_updated", group });
+        break;
+      }
+
+      case "remove_from_group": {
+        const group = manager.removeFromGroup(msg.groupId, msg.sessionId);
+        if (group) broadcast({ type: "group_updated", group });
+        break;
+      }
+
+      case "list_groups": {
+        send(ws, { type: "group_list", groups: manager.listGroups() });
+        break;
+      }
+
+      case "export_logs": {
+        const result = manager.exportLogs(msg.sessionId, msg.format);
+        if (result) {
+          send(ws, { type: "export_data", sessionId: msg.sessionId, format: msg.format, data: result.data, filename: result.filename });
+        } else {
+          send(ws, { type: "error", message: "Session not found or export failed", sessionId: msg.sessionId });
         }
         break;
       }

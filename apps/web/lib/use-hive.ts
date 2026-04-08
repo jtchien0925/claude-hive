@@ -5,6 +5,9 @@ import type {
   Session,
   ClientMessage,
   ServerMessage,
+  SessionGroup,
+  SessionColor,
+  SSHConfig,
 } from "@claude-hive/shared";
 import { DEFAULT_SERVER_PORT } from "@claude-hive/shared";
 
@@ -13,6 +16,7 @@ export function useHive() {
   const [connected, setConnected] = useState(false);
   const [homeDir, setHomeDir] = useState("");
   const [browseDirs, setBrowseDirs] = useState<{ path: string; dirs: string[] }>({ path: "", dirs: [] });
+  const [groups, setGroups] = useState<SessionGroup[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const terminalDataListeners = useRef<Map<string, Set<(data: string) => void>>>(new Map());
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -40,11 +44,20 @@ export function useHive() {
 
       switch (msg.type) {
         case "session_list":
-          setSessions(msg.sessions);
+          // Full replacement — dedupe by id just in case
+          setSessions(
+            Array.from(new Map(msg.sessions.map((s: Session) => [s.id, s])).values())
+          );
           break;
 
         case "session_created":
-          setSessions((prev) => [...prev, msg.session]);
+          setSessions((prev) => {
+            // Dedupe — don't add if a session with the same id already exists
+            if (prev.some((s) => s.id === msg.session.id)) {
+              return prev.map((s) => (s.id === msg.session.id ? msg.session : s));
+            }
+            return [...prev, msg.session];
+          });
           break;
 
         case "session_removed":
@@ -53,7 +66,22 @@ export function useHive() {
 
         case "session_updated":
           setSessions((prev) =>
-            prev.map((s) => (s.id === msg.session.id ? msg.session : s))
+            prev.map((s) => {
+              if (s.id !== msg.session.id) return s;
+              // Only create a new object if something visible changed —
+              // skip pure metrics updates to avoid re-render cascades
+              if (
+                s.status === msg.session.status &&
+                s.name === msg.session.name &&
+                s.color === msg.session.color &&
+                s.workingDir === msg.session.workingDir
+              ) {
+                // Mutate metrics in place — these don't affect rendering
+                s.metrics = msg.session.metrics;
+                return s;
+              }
+              return msg.session;
+            })
           );
           break;
 
@@ -76,6 +104,34 @@ export function useHive() {
         case "error":
           console.error("[hive]", msg.message);
           break;
+
+        case "group_list":
+          setGroups(msg.groups);
+          break;
+
+        case "group_created":
+          setGroups((prev) => [...prev, msg.group]);
+          break;
+
+        case "group_updated":
+          setGroups((prev) => prev.map((g) => (g.id === msg.group.id ? msg.group : g)));
+          break;
+
+        case "group_deleted":
+          setGroups((prev) => prev.filter((g) => g.id !== msg.groupId));
+          break;
+
+        case "export_data": {
+          // Trigger download in browser
+          const blob = new Blob([msg.data], { type: "text/plain" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = msg.filename;
+          a.click();
+          URL.revokeObjectURL(url);
+          break;
+        }
       }
     };
 
@@ -98,8 +154,8 @@ export function useHive() {
   }, [connect]);
 
   const createSession = useCallback(
-    (name: string, workingDir: string, initialPrompt?: string) => {
-      send({ type: "create_session", name, workingDir, initialPrompt });
+    (name: string, workingDir: string, initialPrompt?: string, color?: SessionColor, ssh?: SSHConfig) => {
+      send({ type: "create_session", name, workingDir, initialPrompt, color, ssh });
     },
     [send]
   );
@@ -147,8 +203,55 @@ export function useHive() {
     []
   );
 
+  const setSessionColor = useCallback(
+    (sessionId: string, color: SessionColor) => {
+      send({ type: "set_session_color", sessionId, color });
+    },
+    [send]
+  );
+
+  const renameSession = useCallback(
+    (sessionId: string, name: string) => {
+      send({ type: "rename_session", sessionId, name });
+    },
+    [send]
+  );
+
+  const createGroup = useCallback(
+    (name: string) => { send({ type: "create_group", name }); },
+    [send]
+  );
+
+  const deleteGroup = useCallback(
+    (groupId: string) => { send({ type: "delete_group", groupId }); },
+    [send]
+  );
+
+  const addToGroup = useCallback(
+    (groupId: string, sessionId: string) => { send({ type: "add_to_group", groupId, sessionId }); },
+    [send]
+  );
+
+  const removeFromGroup = useCallback(
+    (groupId: string, sessionId: string) => { send({ type: "remove_from_group", groupId, sessionId }); },
+    [send]
+  );
+
+  const listGroups = useCallback(
+    () => { send({ type: "list_groups" }); },
+    [send]
+  );
+
+  const exportLogs = useCallback(
+    (sessionId: string, format: 'text' | 'json' | 'ansi') => {
+      send({ type: "export_logs", sessionId, format });
+    },
+    [send]
+  );
+
   return {
     sessions,
+    groups,
     connected,
     homeDir,
     browseDirs,
@@ -160,5 +263,13 @@ export function useHive() {
     getBuffer,
     browsePath,
     onTerminalData,
+    setSessionColor,
+    renameSession,
+    createGroup,
+    deleteGroup,
+    addToGroup,
+    removeFromGroup,
+    listGroups,
+    exportLogs,
   };
 }
