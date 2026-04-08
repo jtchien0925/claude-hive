@@ -3,32 +3,32 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-        <string>Claude Hive</string>
-            <key>CFBundleDisplayName</key>
-                <string>Claude Hive</string>
-                    <key>CFBundleIdentifier</key>
-                        <string>com.jtchien.claude-hive</string>
-                            <key>CFBundleVersion</key>
-                                <string>1.0.0</string>
-                                    <key>CFBundleShortVersionString</key>
-                                        <string>1.0.0</string>
-                                            <key>CFBundlePackageType</key>
-                                                <string>APPL</string>
-                                                    <key>CFBundleSignature</key>
-                                                        <string>????</string>
-                                                            <key>CFBundleExecutable</key>
-                                                                <string>launch</string>
-                                                                    <key>CFBundleIconFile</key>
-                                                                        <string>AppIcon</string>
-                                                                            <key>LSMinimumSystemVersion</key>
-                                                                                <string>12.0</string>
-                                                                                    <key>NSHighResolutionCapable</key>
-                                                                                        <true/>
-                                                                                            <key>LSUIElement</key>
-                                                                                                <false/>
-                                                                                                    <key>NSSupportsAutomaticTermination</key>
-                                                                                                        <false/>
-                                                                                                            <key>NSSupportsSuddenTermination</key>
-                                                                                                                <false/>
-                                                                                                                </dict>
-                                                                                                                </plist>
+    <string>Claude Hive</string>
+    <key>CFBundleDisplayName</key>
+    <string>Claude Hive</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.jtchien.claude-hive</string>
+    <key>CFBundleVersion</key>
+    <string>1.0.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
+    <key>CFBundleExecutable</key>
+    <string>launch</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSUIElement</key>
+    <false/>
+    <key>NSSupportsAutomaticTermination</key>
+    <false/>
+    <key>NSSupportsSuddenTermination</key>
+    <false/>
+</dict>
+</plist>

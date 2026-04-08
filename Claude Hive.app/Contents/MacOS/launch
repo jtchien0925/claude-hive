@@ -1,7 +1,9 @@
 #!/bin/bash
+# ──────────────────────────────────────────────────────────────
 # Claude Hive — macOS App Launcher
 # Resolves the project root relative to the .app bundle and
 # runs the main launch.sh script in a visible Terminal window.
+# ──────────────────────────────────────────────────────────────
 
 # Resolve the project root (the .app lives inside the project dir)
 APP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
