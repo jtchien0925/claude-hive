@@ -1,0 +1,24 @@
+#!/bin/bash
+# Claude Hive — macOS App Launcher
+# Resolves the project root relative to the .app bundle and
+# runs the main launch.sh script in a visible Terminal window.
+
+# Resolve the project root (the .app lives inside the project dir)
+APP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+PROJECT_DIR="$(cd "$APP_DIR/.." && pwd)"
+
+# Verify launch.sh exists
+if [ ! -f "$PROJECT_DIR/launch.sh" ]; then
+  osascript -e "display dialog \"Could not find launch.sh in:\\n$PROJECT_DIR\\n\\nMake sure Claude Hive.app is inside the claude-hive project folder.\" with title \"Claude Hive\" buttons {\"OK\"} default button 1 with icon caution"
+  exit 1
+fi
+
+# Open a new Terminal window and run launch.sh there
+# (so the user can see logs and Ctrl+C to stop)
+osascript <<EOF
+tell application "Terminal"
+    activate
+    set newTab to do script "cd \"$PROJECT_DIR\" && ./launch.sh"
+    set custom title of front window to "Claude Hive"
+end tell
+EOF
