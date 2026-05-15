@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useHive } from "@/lib/use-hive";
 import { useTheme } from "@/lib/theme-context";
+import { ensurePermission, isMuted, setMuted } from "@/lib/notifications";
 import { SessionCard } from "@/components/session-card";
 import { NewSessionDialog } from "@/components/new-session-dialog";
 import { GroupsSidebar } from "@/components/groups-sidebar";
@@ -12,6 +13,15 @@ import type { LayoutMode } from "@claude-hive/shared";
 import { formatTokens, formatCost } from "@claude-hive/shared";
 
 export default function Home() {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [layout, setLayout] = useState<LayoutMode>("single");
+  const [muted, setMutedState] = useState(false);
+
+  const handleNotificationClick = useCallback((sessionId: string) => {
+    setSelectedId(sessionId);
+  }, []);
+
   const {
     sessions,
     groups,
@@ -33,14 +43,26 @@ export default function Home() {
     addToGroup,
     removeFromGroup,
     exportLogs,
-  } = useHive();
+  } = useHive(handleNotificationClick);
 
   const { theme, toggleTheme } = useTheme();
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [layout, setLayout] = useState<LayoutMode>("single");
   const prevSessionCount = useRef(sessions.length);
+
+  // Hydrate muted preference from localStorage on mount
+  useEffect(() => {
+    setMutedState(isMuted());
+  }, []);
+
+  const toggleMuted = useCallback(() => {
+    setMutedState((m) => {
+      const next = !m;
+      setMuted(next);
+      // First time the user enables notifications, lazily ask permission
+      if (!next) void ensurePermission();
+      return next;
+    });
+  }, []);
 
   // Dedupe sessions by id — memoized to prevent unnecessary re-renders downstream
   const uniqueSessions = useMemo(
@@ -85,6 +107,27 @@ export default function Home() {
           <span className="text-xs text-[var(--text-muted)]">
             {uniqueSessions.length} session{uniqueSessions.length !== 1 ? "s" : ""}
           </span>
+          {/* Notification mute toggle */}
+          <button
+            onClick={toggleMuted}
+            className="rounded-lg border border-[var(--border)] p-1.5 text-[var(--text-muted)] hover:border-[var(--border-active)] hover:text-[var(--text-secondary)] transition-colors"
+            title={muted ? "Notifications muted — click to enable" : "Notifications on — click to mute"}
+          >
+            {muted ? (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                <path d="M18.63 13A17.89 17.89 0 0 1 18 8" />
+                <path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14" />
+                <path d="M18 8a6 6 0 0 0-9.33-5" />
+                <line x1="1" y1="1" x2="23" y2="23" />
+              </svg>
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+              </svg>
+            )}
+          </button>
           {/* Theme toggle */}
           <button
             onClick={toggleTheme}

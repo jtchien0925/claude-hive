@@ -7,11 +7,16 @@ import type {
   ServerMessage,
   SessionGroup,
   SessionColor,
+  SessionStatus,
   SSHConfig,
 } from "@claude-hive/shared";
 import { DEFAULT_SERVER_PORT } from "@claude-hive/shared";
+import { fireNotification } from "./notifications";
 
-export function useHive() {
+// Notifications: we reuse the existing `session_updated` event rather than
+// adding a dedicated transition event. The client already holds prev state in
+// React, so transitions are detected here. This keeps the wire protocol minimal.
+export function useHive(onNotificationClick?: (sessionId: string) => void) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [connected, setConnected] = useState(false);
   const [homeDir, setHomeDir] = useState("");
@@ -20,6 +25,15 @@ export function useHive() {
   const wsRef = useRef<WebSocket | null>(null);
   const terminalDataListeners = useRef<Map<string, Set<(data: string) => void>>>(new Map());
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Tracks status seen on the previous render so we can detect transitions
+  // into "waiting_approval". `seededRef` ensures we don't notify for sessions
+  // that were already waiting when the page first loaded (initial snapshot).
+  const prevStatusRef = useRef<Map<string, SessionStatus>>(new Map());
+  const seededRef = useRef(false);
+  const notificationClickRef = useRef(onNotificationClick);
+  useEffect(() => {
+    notificationClickRef.current = onNotificationClick;
+  }, [onNotificationClick]);
 
   const send = useCallback((msg: ClientMessage) => {
     const ws = wsRef.current;
@@ -152,6 +166,33 @@ export function useHive() {
       wsRef.current?.close();
     };
   }, [connect]);
+
+  // Desktop notifications for transitions into "waiting_approval".
+  // First effect run seeds the prev-status map without firing, so sessions
+  // already waiting at page load are silent.
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    const next = new Map<string, SessionStatus>();
+    for (const s of sessions) next.set(s.id, s.status);
+
+    if (seededRef.current) {
+      for (const s of sessions) {
+        const before = prev.get(s.id);
+        if (s.status === "waiting_approval" && before !== "waiting_approval") {
+          void fireNotification({
+            sessionId: s.id,
+            title: s.name,
+            body: s.workingDir,
+            onClick: () => notificationClickRef.current?.(s.id),
+          });
+        }
+      }
+    } else {
+      seededRef.current = true;
+    }
+
+    prevStatusRef.current = next;
+  }, [sessions]);
 
   const createSession = useCallback(
     (name: string, workingDir: string, initialPrompt?: string, color?: SessionColor, ssh?: SSHConfig) => {
