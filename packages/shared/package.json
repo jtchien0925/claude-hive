@@ -7,7 +7,9 @@
   "types": "./src/index.ts",
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "typescript": "^5.7.0"

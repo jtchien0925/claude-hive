@@ -6,6 +6,10 @@
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "start": "node packages/server/dist/index.js & cd apps/web && pnpm start",
     "launch": "./launch.sh",
     "postinstall": "cd node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty && npx node-gyp rebuild 2>/dev/null || true"
@@ -16,6 +20,22 @@
   },
   "license": "MIT",
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild", "node-pty", "sharp"]
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "node-pty",
+      "sharp"
+    ]
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.2.0",
+    "@eslint/js": "^9.18.0",
+    "eslint": "^9.18.0",
+    "eslint-config-next": "^15.3.0",
+    "eslint-config-prettier": "^9.1.0",
+    "globals": "^15.14.0",
+    "prettier": "^3.4.0",
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.20.0"
   }
 }

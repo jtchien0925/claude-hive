@@ -1,5 +1,5 @@
 import { WebSocketServer, WebSocket } from "ws";
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { SessionManager } from "./session-manager.js";
